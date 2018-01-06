@@ -1,0 +1,139 @@
+<head>
+    <link rel="stylesheet" href="/mathquill/mathquill.css" />
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.0/jquery.min.js"></script>
+    <script src="/mathquill/mathquill.js"></script>
+
+    <style>
+        div {
+            margin-top: 2px
+        }
+
+    </style>
+</head>
+
+<body>
+    <script>
+        var MQ = MathQuill.getInterface(2);
+
+        var selectedInput = null
+
+        // Sets up the list of math fields and the getPrev and getNext functions
+        var mathFields = []
+        mathFields.getPrev = function(current) {
+            var prev = null
+            try {
+                for (var i = 0; i < this.length; i++) {
+                    if (this[i] == current) {
+                        if (this[i - 1]) {
+                            prev = this[i - 1]
+                        }
+                        break
+                    }
+                }
+            } catch (err) {}
+            return prev
+        }
+        mathFields.getNext = function(current) {
+            var prev = null
+            try {
+                for (var i = 0; i < this.length; i++) {
+                    if (this[i] == current) {
+                        if (this[i + 1]) {
+                            prev = this[i + 1]
+                        }
+                        break
+                    }
+                }
+            } catch (err) {}
+            return prev
+        }
+        mathFields.removeElem = function(elem) {
+            var index = this.indexOf(elem)
+            if (index > -1) {
+                this.splice(index, 1);
+            }
+        }
+        mathFields.pushAfter = function(toPush, pushAfter) {
+            var index = this.indexOf(pushAfter)
+            if (index > -1) {
+                this.splice(index + 1, 0, toPush);
+            }
+        }
+
+        // Creates a new entry at the bottom of the list
+        function createEntry(prev, prevMathField) {
+            var s = '<span></span>' // HTML string
+            var div = document.createElement('div')
+            div.innerHTML = s
+            var element = div.firstChild
+
+            // Inserts the next box after a given element prev
+            if (prev) {
+                $(div).insertAfter(prev)
+            } else {
+                document.body.appendChild(div)
+            }
+
+            $(element).mousedown(function() {
+                selectedInput = element
+            })
+
+            let mathField = MQ.MathField(element, {
+                handlers: {
+                    edit: function() {
+                        element.style.borderColor = mathField.latex().length > 0 ? 'white' : 'grey'
+                    },
+                    enter: function() {
+                        var newEntry = createEntry(div, mathField)
+                        newEntry.focus()
+                        selectedInput = newEntry
+                    },
+                    upOutOf: function() {
+                        let prev = mathFields.getPrev(mathField)
+                        if (prev) {
+                            prev.focus()
+                            selectedInput = prev
+                        }
+                    },
+                    downOutOf: function() {
+                        let next = mathFields.getNext(mathField)
+                        if (next) {
+                            next.focus()
+                            selectedInput = next
+                        }
+                    },
+                    deleteOutOf: function() {
+                        if (mathFields.length > 1 && mathField.latex().length == 0) {
+                            let prev = mathFields.getPrev(mathField)
+                            if (prev) {
+                                prev.focus()
+                                selectedInput = prev
+                            } else {
+                                let next = mathFields.getNext(mathField)
+                                if (next) {
+                                    next.focus()
+                                    selectedInput = next
+                                }
+                            }
+                            $(div).remove()
+                            mathFields.removeElem(mathField)
+                        }
+                    }
+                },
+                restrictMismatchedBrackets: true
+            })
+
+            if (prevMathField) {
+                mathFields.pushAfter(mathField, prevMathField)
+            } else {
+                mathFields.push(mathField)
+            }
+
+            return mathField
+        }
+
+        // Craetes the first math input
+        createEntry()
+
+    </script>
+</body>
