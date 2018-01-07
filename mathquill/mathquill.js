@@ -1065,20 +1065,11 @@ function getInterface(v) {
       if (this.__controller.blurred) this.__controller.cursor.hide().parent.blur();
       return this;
     };
-    _.empty = function() {
-      var root = this.__controller.root, cursor = this.__controller.cursor;
-      root.eachChild('postOrder', 'dispose');
-      root.ends[L] = root.ends[R] = 0;
-      root.jQ.empty();
-      delete cursor.selection;
-      cursor.insAtRightEnd(root);
-      return this;
-    };
     _.cmd = function(cmd) {
       var ctrlr = this.__controller.notify(), cursor = ctrlr.cursor;
       if (/^\\[a-z]+$/i.test(cmd)) {
         cmd = cmd.slice(1);
-        var klass = LatexCmds[cmd];
+        var klass = LatexCmds[cmd] || Environments[cmd];
         if (klass) {
           cmd = klass(cmd);
           if (cursor.selection) cmd.replaces(cursor.replaceSelection());
@@ -2041,15 +2032,11 @@ Controller.open(function(_) {
   _.ctrlDeleteDir = function(dir) {
     prayDirection(dir);
     var cursor = this.cursor;
-    if (!cursor[dir] || cursor.selection) return this.deleteDir(dir);
+    if (!cursor[L] || cursor.selection) return this.deleteDir();
 
     this.notify('edit');
-    if (dir === L) {
-      Fragment(cursor.parent.ends[L], cursor[L]).remove();
-    } else {
-      Fragment(cursor[R], cursor.parent.ends[R]).remove();
-    };
-    cursor.insAtDirEnd(dir, cursor.parent);
+    Fragment(cursor.parent.ends[L], cursor[L]).remove();
+    cursor.insAtDirEnd(L, cursor.parent);
 
     if (cursor[L].siblingDeleted) cursor[L].siblingDeleted(cursor.options, R);
     if (cursor[R].siblingDeleted) cursor[R].siblingDeleted(cursor.options, L);
@@ -2956,7 +2943,7 @@ var TextBlock = P(Node, function(_, super_) {
   _.latex = function() {
     var contents = this.textContents();
     if (contents.length === 0) return '';
-    return '\\text{' + contents.replace(/\\/g, '\\backslash ').replace(/[{}]/g, '\\$&') + '}';
+    return '\\text{' + contents + '}';
   };
   _.html = function() {
     return (
@@ -3316,7 +3303,7 @@ CharCmds['\\'] = P(MathCommand, function(_, super_) {
       if (ch.match(/[a-z]/i)) VanillaSymbol(ch).createLeftOf(cursor);
       else {
         this.parent.renderCommand(cursor);
-        if (ch !== '\\' || !this.isEmpty()) cursor.parent.write(cursor, ch);
+        if (ch !== '\\' || !this.isEmpty()) this.parent.parent.write(cursor, ch);
       }
     };
     this.ends[L].keystroke = function(key, e, ctrlr) {
@@ -3357,7 +3344,7 @@ CharCmds['\\'] = P(MathCommand, function(_, super_) {
 
     var latex = this.ends[L].latex();
     if (!latex) latex = ' ';
-    var cmd = LatexCmds[latex];
+    var cmd = LatexCmds[latex] || Environments[latex];
     if (cmd) {
       cmd = cmd(latex);
       if (this._replacedFragment) cmd.replaces(this._replacedFragment);
@@ -3457,8 +3444,6 @@ LatexCmds.underline = bind(Style, '\\underline', 'span', 'class="mq-non-leaf mq-
 LatexCmds.overline = LatexCmds.bar = bind(Style, '\\overline', 'span', 'class="mq-non-leaf mq-overline"');
 LatexCmds.overrightarrow = bind(Style, '\\overrightarrow', 'span', 'class="mq-non-leaf mq-overarrow mq-arrow-right"');
 LatexCmds.overleftarrow = bind(Style, '\\overleftarrow', 'span', 'class="mq-non-leaf mq-overarrow mq-arrow-left"');
-LatexCmds.overleftrightarrow = bind(Style, '\\overleftrightarrow', 'span', 'class="mq-non-leaf mq-overarrow mq-arrow-both"');
-LatexCmds.overarc = bind(Style, '\\overarc', 'span', 'class="mq-non-leaf mq-overarc"');
 LatexCmds.dot = P(MathCommand, function(_, super_) {
     _.init = function() {
         super_.init.call(this, '\\dot', '<span class="mq-non-leaf"><span class="mq-dot-recurring-inner">'
@@ -3706,15 +3691,6 @@ LatexCmds['^'] = P(SupSub, function(_, super_) {
     this.sup.downOutOf = insLeftOfMeUnlessAtEnd;
     super_.finalizeTree.call(this);
   };
-  _.reflow = function() {
-     var $block = this.jQ;//mq-supsub
-
-     var h = $block.prev().innerHeight() ;
-     h *= 0.6 ;
-
-     $block.css( 'vertical-align',  h + 'px' ) ;
-
-  } ;
 });
 
 var SummationNotation = P(MathCommand, function(_, super_) {
@@ -4236,6 +4212,577 @@ var Embed = LatexCmds.embed = P(Symbol, function(_, super_) {
         ;
       })
     ;
+  };
+});
+
+// LaTeX environments
+// Environments are delimited by an opening \begin{} and a closing
+// \end{}. Everything inside those tags will be formatted in a
+// special manner depending on the environment type.
+var Environments = {};
+
+LatexCmds.begin = P(MathCommand, function(_, super_) {
+  _.parser = function() {
+    var string = Parser.string;
+    var regex = Parser.regex;
+    return string('{')
+      .then(regex(/^[a-z]+\*?/i))  // LaTex uses * as a convention for alternative forms of a command, usually 'without automatic numbering'
+      .skip(string('}'))
+      .then(function (env) {
+          return (Environments[env] ?
+            Environments[env]().parser() :
+            Parser.fail('unknown environment type: '+env)
+          ).skip(string('\\end{'+env+'}'));
+      })
+    ;
+  };
+});
+
+var Environment = P(MathCommand, function(_, super_) {
+  _.template = [['\\begin{', '}'], ['\\end{', '}']];
+  _.wrappers = function () {
+    return [
+      _.template[0].join(this.environment),
+      _.template[1].join(this.environment)
+    ];
+  };
+});
+
+// An 'abstract' environment extended by matrix and align*
+var TabularEnv = P(Environment, function(_, super_) {
+  _.latex = function() {
+    var delimiters = this.delimiters;
+    var latex = '';
+    var row;
+
+    this.eachChild(function (cell) {
+      if (typeof row !== 'undefined') {
+        latex += (row !== cell.row) ?
+          delimiters.row :
+          delimiters.column;
+      }
+      row = cell.row;
+      latex += cell.latex();
+    });
+
+    return this.wrappers().join(latex);
+  };
+  _.tableHtml = function(betweenCells) {
+    var cells = [], trs = '', i=0, row;
+
+    // Build <tr><td>.. structure from cells
+    this.eachChild(function (cell) {
+      if (row !== cell.row) {
+        row = cell.row;
+        trs += '<tr>$tds</tr>';
+        cells[row] = [];
+      }
+      cells[row].push('<td>&'+(i++)+'</td>');
+    });
+
+    return (
+        '<table class="mq-non-leaf">'
+      +   trs.replace(/\$tds/g, function () {
+            return cells.shift().join(betweenCells || '');
+          })
+      + '</table>'
+    );
+  };
+  _.parser = function() {
+    var self = this;
+    var delimiters = this.delimiters;
+    var optWhitespace = Parser.optWhitespace;
+    var string = Parser.string;
+
+    return optWhitespace
+    .then(string(delimiters.column)
+      .or(string(delimiters.row))
+      .or(latexMathParser.block))
+    .many()
+    .skip(optWhitespace)
+    .then(function(items) {
+      var blocks = [];
+      var row = 0;
+      self.blocks = [];
+
+      function addCell() {
+        self.blocks.push(TabularCell(row, self, blocks));
+        blocks = [];
+      }
+
+      for (var i=0; i<items.length; i+=1) {
+        if (items[i] instanceof MathBlock) {
+          blocks.push(items[i]);
+        } else {
+          addCell();
+          if (items[i] === delimiters.row) row+=1;
+        }
+      }
+      addCell();
+      self.autocorrect();
+      return Parser.succeed(self);
+    });
+  };
+  // Relink all the cells after parsing
+  _.finalizeTree = function() {
+    var table = this.jQ.find('table');
+    table.toggleClass('mq-rows-1', table.find('tr').length === 1);
+    this.relink();
+  };
+  // Enter the matrix at the top or bottom row if updown is configured.
+  _.getEntryPoint = function(dir, cursor, updown) {
+    if (updown === 'up') {
+      if (dir === L) {
+        return this.blocks[this.rowSize - 1];
+      } else {
+        return this.blocks[0];
+      }
+    } else { // updown === 'down'
+      if (dir === L) {
+        return this.blocks[this.blocks.length - 1];
+      } else {
+        return this.blocks[this.blocks.length - this.rowSize];
+      }
+    }
+  };
+  // Exit the matrix at the first and last columns if updown is configured.
+  _.atExitPoint = function(dir, cursor) {
+      // Which block are we in?
+      var i = this.blocks.indexOf(cursor.parent);
+      if (dir === L) {
+        // If we're on the left edge and moving left, we should exit.
+        return i % this.rowSize === 0;
+      } else {
+        // If we're on the right edge and moving right, we should exit.
+        return (i + 1) % this.rowSize === 0;
+      }
+  };
+  _.moveTowards = function(dir, cursor, updown) {
+    var entryPoint = updown && this.getEntryPoint(dir, cursor, updown);
+    cursor.insAtDirEnd(-dir, entryPoint || this.ends[-dir]);
+  };
+  // Set up directional pointers between cells
+  _.relink = function() {
+    var blocks = this.blocks;
+    var rows = [];
+    var row, column, cell;
+
+    // The row size will be used by other functions down the track.
+    // Begin by assuming we're a one-row matrix, and we'll overwrite this if we find another row.
+    this.rowSize = blocks.length;
+
+    // Use a for loop rather than eachChild
+    // as we're still making sure children()
+    // is set up properly
+    for (var i=0; i<blocks.length; i+=1) {
+      cell = blocks[i];
+      if (row !== cell.row) {
+        if (cell.row === 1) {
+          // We've just finished iterating the first row.
+          this.rowSize = column;
+        }
+        row = cell.row;
+        rows[row] = [];
+        column = 0;
+      }
+      rows[row][column] = cell;
+
+      // Set up horizontal linkage
+      cell[R] = blocks[i+1];
+      cell[L] = blocks[i-1];
+
+      // Set up vertical linkage
+      if (rows[row-1] && rows[row-1][column]) {
+        cell.upOutOf = rows[row-1][column];
+        rows[row-1][column].downOutOf = cell;
+      }
+
+      column+=1;
+    }
+
+    // set start and end blocks of matrix
+    this.ends[L] = blocks[0];
+    this.ends[R] = blocks[blocks.length-1];
+  };
+  // Ensure consistent row lengths
+  _.autocorrect = function() {
+    var lengths = [], rows = [];
+    var blocks = this.blocks;
+    var maxLength, shortfall, position, row, i;
+
+    for (i=0; i<blocks.length; i+=1) {
+      row = blocks[i].row;
+      rows[row] = rows[row] || [];
+      rows[row].push(blocks[i]);
+      lengths[row] = rows[row].length;
+    }
+
+    maxLength = Math.max.apply(null, lengths);
+    if (maxLength !== Math.min.apply(null, lengths)) {
+      // Pad shorter rows to correct length
+      for (i=0; i<rows.length; i+=1) {
+        shortfall = maxLength - rows[i].length;
+        while (shortfall) {
+          position = maxLength*i + rows[i].length;
+          blocks.splice(position, 0, TabularCell(i, this));
+          shortfall-=1;
+        }
+      }
+      this.relink();
+    }
+  };
+  // Deleting a cell will also delete the current row and
+  // column if they are empty, and relink the matrix.
+  _.deleteCell = function(currentCell) {
+    var rows = [], columns = [], myRow = [], myColumn = [];
+    var blocks = this.blocks, row, column;
+
+    // Create arrays for cells in the current row / column
+    this.eachChild(function (cell) {
+      if (row !== cell.row) {
+        row = cell.row;
+        rows[row] = [];
+        column = 0;
+      }
+      columns[column] = columns[column] || [];
+      columns[column].push(cell);
+      rows[row].push(cell);
+
+      if (cell === currentCell) {
+        myRow = rows[row];
+        myColumn = columns[column];
+      }
+
+      column+=1;
+    });
+
+    function isEmpty(cells) {
+      var empties = [];
+      for (var i=0; i<cells.length; i+=1) {
+        if (cells[i].isEmpty()) empties.push(cells[i]);
+      }
+      return empties.length === cells.length;
+    }
+
+    function remove(cells) {
+      for (var i=0; i<cells.length; i+=1) {
+        if (blocks.indexOf(cells[i]) > -1) {
+          cells[i].remove();
+          blocks.splice(blocks.indexOf(cells[i]), 1);
+        }
+      }
+    }
+
+    if (isEmpty(myRow) && myColumn.length > 1) {
+      row = rows.indexOf(myRow);
+      // Decrease all following row numbers
+      this.eachChild(function (cell) {
+        if (cell.row > row) cell.row-=1;
+      });
+      // Dispose of cells and remove <tr>
+      remove(myRow);
+      this.jQ.find('tr').eq(row).remove();
+    }
+    if (this.removeEmptyColumns && isEmpty(myColumn) && myRow.length > 1) {
+      remove(myColumn);
+    }
+    this.finalizeTree();
+  };
+  _.addRow = function(afterCell, modifyNewRow) {
+    var previous = [], newCells = [], next = [];
+    var newRow = $('<tr></tr>'), row = afterCell.row;
+    var columns = 0, block, column;
+
+    this.eachChild(function (cell) {
+      // Cache previous rows
+      if (cell.row <= row) {
+        previous.push(cell);
+      }
+      // Work out how many columns
+      if (cell.row === row) {
+        if (cell === afterCell) column = columns;
+        columns+=1;
+      }
+      // Cache cells after new row
+      if (cell.row > row) {
+        cell.row+=1;
+        next.push(cell);
+      }
+    });
+
+    // Add new cells, one for each column
+    for (var i=0; i<columns; i+=1) {
+      block = TabularCell(row+1);
+      block.parent = this;
+      newCells.push(block);
+
+      // Create cell <td>s and add to new row
+      block.jQ = $('<td class="mq-empty">')
+        .attr(mqBlockId, block.id)
+        .appendTo(newRow);
+    }
+
+    // If necessary, modify the new row before insertion
+    if (modifyNewRow) modifyNewRow(newRow);
+
+    // Insert the new row
+    this.jQ.find('tr').eq(row).after(newRow);
+    this.blocks = previous.concat(newCells, next);
+    return newCells[column];
+  };
+  _.insert = function(method, afterCell) {
+    if (this[method]) {
+      var cellToFocus = this[method](afterCell);
+      this.cursor = this.cursor || this.parent.cursor;
+      this.finalizeTree();
+      this.bubble('reflow').cursor.insAtRightEnd(cellToFocus);
+    }
+  };
+  _.backspace = function(cell, dir, cursor, finalDeleteCallback) {
+    var dirwards = cell[dir];
+    if (cell.isEmpty()) {
+      this.deleteCell(cell);
+      while (dirwards &&
+        dirwards[dir] &&
+        this.blocks.indexOf(dirwards) === -1) {
+          dirwards = dirwards[dir];
+      }
+      if (dirwards) {
+        cursor.insAtDirEnd(-dir, dirwards);
+      }
+      if (this.blocks.length === 1 && this.blocks[0].isEmpty()) {
+        finalDeleteCallback();
+        this.finalizeTree();
+      }
+      this.bubble('edited');
+    }
+  };
+});
+
+var Matrix =
+Environments.matrix = P(TabularEnv, function(_, super_) {
+  _.environment = 'matrix';
+  _.removeEmptyColumns = true;
+  _.parentheses = {
+    left: '',
+    right: ''
+  };
+  _.delimiters = {
+    column: '&',
+    row: '\\\\'
+  };
+  _.reflow = function() {
+    var blockjQ = this.jQ.children('table');
+
+    var height = blockjQ.outerHeight()/+blockjQ.css('fontSize').slice(0,-2);
+
+    var parens = this.jQ.children('.mq-paren');
+    if (parens.length) {
+      scale(parens, min(1 + .2*(height - 1), 1.2), 1.05*height);
+    }
+  };
+  _.html = function () {
+    function parenHtml(paren) {
+      return (paren) ?
+          '<span class="mq-scaled mq-paren">'
+        +   paren
+        + '</span>' : '';
+    }
+
+    this.htmlTemplate =
+        '<span class="mq-tabular mq-non-leaf">'
+      +   parenHtml(this.parentheses.left)
+      +   this.tableHtml()
+      +   parenHtml(this.parentheses.right)
+      + '</span>'
+    ;
+
+    return super_.html.call(this);
+  };
+  _.createBlocks = function() {
+    this.blocks = [
+      TabularCell(0, this),
+      TabularCell(0, this),
+      TabularCell(1, this),
+      TabularCell(1, this)
+    ];
+  };
+  _.addColumn = function(afterCell) {
+    var rows = [], newCells = [];
+    var column, block;
+
+    // Build rows array and find new column index
+    this.eachChild(function (cell) {
+      rows[cell.row] = rows[cell.row] || [];
+      rows[cell.row].push(cell);
+      if (cell === afterCell) column = rows[cell.row].length;
+    });
+
+    // Add new cells, one for each row
+    for (var i=0; i<rows.length; i+=1) {
+      block = TabularCell(i);
+      block.parent = this;
+      newCells.push(block);
+      rows[i].splice(column, 0, block);
+
+      block.jQ = $('<td class="mq-empty">')
+        .attr(mqBlockId, block.id);
+    }
+
+    // Add cell <td> elements in correct positions
+    this.jQ.find('tr').each(function (i) {
+      $(this).find('td').eq(column-1).after(rows[i][column].jQ);
+    });
+
+    // Flatten the rows array-of-arrays
+    this.blocks = [].concat.apply([], rows);
+    return newCells[afterCell.row];
+  };
+});
+
+Environments.pmatrix = P(Matrix, function(_, super_) {
+  _.environment = 'pmatrix';
+  _.parentheses = {
+    left: '(',
+    right: ')'
+  };
+});
+
+Environments.bmatrix = P(Matrix, function(_, super_) {
+  _.environment = 'bmatrix';
+  _.parentheses = {
+    left: '[',
+    right: ']'
+  };
+});
+
+Environments.Bmatrix = P(Matrix, function(_, super_) {
+  _.environment = 'Bmatrix';
+  _.parentheses = {
+    left: '{',
+    right: '}'
+  };
+});
+
+Environments.vmatrix = P(Matrix, function(_, super_) {
+  _.environment = 'vmatrix';
+  _.parentheses = {
+    left: '|',
+    right: '|'
+  };
+});
+
+Environments.Vmatrix = P(Matrix, function(_, super_) {
+  _.environment = 'Vmatrix';
+  _.parentheses = {
+    left: '&#8214;',
+    right: '&#8214;'
+  };
+});
+
+// An environment for aligning equations that translates well enough to amsmath align*.
+// Similar to matrix, but a more restrictive design
+// allowing only three columns, the middle of which is just the '=' sign, and is represented slightly
+// differently in latex.
+Environments['align*'] = P(TabularEnv, function(_, super_) {
+  _.environment = 'align*';
+  _.removeEmptyColumns = false;
+  _.delimiters = {
+    column: '&=',
+    row: '\\\\'
+  };
+  _.htmlColumnSeparator = '<td class="mq-align-equal">=</td>';
+  _.createBlocks = function() {
+    this.blocks = [
+      TabularCell(0, this),
+      TabularCell(0, this)
+    ];
+  };
+  _.tableHtml = function() {
+    return super_.tableHtml.call(this, this.htmlColumnSeparator);
+  };
+  _.html = function () {
+    this.htmlTemplate =
+        '<span class="mq-tabular mq-rcl mq-non-leaf">'
+      +   this.tableHtml()
+      + '</span>'
+    ;
+
+    return super_.html.call(this);
+  };
+  _.addRow = function(afterCell) {
+    var separator = this.htmlColumnSeparator;
+    return super_.addRow.call(this, afterCell, function (newRow) {
+      // modifyNewRow callback adds column separator as middle cell
+      newRow.find('td').eq(0).after(separator);
+    });
+  };
+  // jQadd hack to keep the cursor in the correct row on seek
+  _.jQadd = function(jQ) {
+    var cmd = this, eachChild = this.eachChild;
+    jQ = super_.jQadd.call(this, jQ);
+
+    // Listen for mousedown on td.mq-align-equal descendants
+    // Handler will run just before `this.seek` is triggered by a similar
+    // listener in the controller.
+    jQ.delegate('td.mq-align-equal', 'mousedown.mathquill.alignenv', function (e) {
+      var tds = $(e.currentTarget).siblings('td');
+      var row = Fragment(
+        Node.byId[tds[0].getAttribute(mqBlockId)],
+        Node.byId[tds[1].getAttribute(mqBlockId)]
+      );
+
+      // Temporarily monkey-patch eachChild so that seek is limited
+      // to this row only.
+      // TODO - fix this properly
+      cmd.eachChild = function() {
+        row.each.apply(row, arguments);
+        cmd.eachChild = eachChild;
+      };
+    });
+    return jQ;
+  };
+});
+
+// Replacement for mathblocks inside TabularEnv cells
+// Adds tabular-specific keyboard commands
+var TabularCell = P(MathBlock, function(_, super_) {
+  _.init = function(row, parent, replaces) {
+    super_.init.call(this);
+    this.row = row;
+    if (parent) {
+      this.adopt(parent, parent.ends[R], 0);
+    }
+    if (replaces) {
+      for (var i=0; i<replaces.length; i++) {
+        replaces[i].children().adopt(this, this.ends[R], 0);
+      }
+    }
+  };
+  _.keystroke = function(key, e, ctrlr) {
+    switch (key) {
+    case 'Shift-Spacebar':
+      e.preventDefault();
+      return this.parent.insert('addColumn', this);
+      break;
+    case 'Shift-Enter':
+    return this.parent.insert('addRow', this);
+      break;
+    }
+    return super_.keystroke.apply(this, arguments);
+  };
+  _.deleteOutOf = function(dir, cursor) {
+    var self = this, args = arguments;
+    this.parent.backspace(this, dir, cursor, function () {
+      // called when last cell gets deleted
+      return super_.deleteOutOf.apply(self, args);
+    });
+  };
+  _.moveOutOf = function(dir, cursor, updown) {
+    var atExitPoint = updown && this.parent.atExitPoint(dir, cursor);
+    // Step out of the matrix if we've moved past an edge column
+    if (!atExitPoint && this[dir]) cursor.insAtDirEnd(-dir, this[dir]);
+    else cursor.insDirOf(dir, this.parent);
   };
 });
 /************************************
