@@ -80,7 +80,7 @@
   display: -moz-inline-box;
   display: inline-block;
   width: 100%;
-  padding: 2px;
+  padding: 4px;
   -webkit-box-sizing: border-box;
   -moz-box-sizing: border-box;
   box-sizing: border-box;
@@ -404,6 +404,9 @@
   width: auto;
   border-bottom: none;
   border-spacing: 3px;
+    
+  margin-left: -10px;
+  margin-right: -10px;
 }
 .mq-math-mode .mq-tabular table.mq-rows-1 {
   /* better alignment when there's just one row */
@@ -416,6 +419,7 @@
   /* defensive resets */
   padding: 0.1em 0.3em;
   vertical-align: baseline;
+  text-align: center;
 }
 .mq-math-mode .mq-tabular.mq-rcl td:nth-child(1) {
   text-align: right;

@@ -15,6 +15,7 @@
     <script>
         var MQ = MathQuill.getInterface(2);
 
+        var shifted = false
         var selectedInput = null
 
         // Sets up the list of math fields and the getPrev and getNext functions
@@ -62,7 +63,7 @@
 
         // Creates a new entry at the bottom of the list
         function createEntry(prev, prevMathField) {
-            var s = '<span style=\'vertical-align: middle\'></span>' // HTML string
+            var s = '<span></span>' // HTML string
             var div = document.createElement('div')
             div.innerHTML = s
             var element = div.firstChild
@@ -82,11 +83,15 @@
                 handlers: {
                     edit: function() {
                         element.style.borderColor = mathField.latex().length > 0 ? 'white' : 'grey'
+
+                        selectedInput = element
                     },
                     enter: function() {
-                        var newEntry = createEntry(div, mathField)
-                        newEntry.focus()
-                        selectedInput = newEntry
+                        if (!shifted) {
+                            var newEntry = createEntry(div, mathField)
+                            newEntry.focus()
+                            selectedInput = newEntry
+                        }
                     },
                     upOutOf: function() {
                         let prev = mathFields.getPrev(mathField)
@@ -100,6 +105,23 @@
                         if (next) {
                             next.focus()
                             selectedInput = next
+                        }
+                    },
+                    moveOutOf: function(direction) {
+                        if (direction == MQ.R) {
+                            let next = mathFields.getNext(mathField)
+                            if (next) {
+                                next.focus()
+                                next.moveToLeftEnd()
+                                selectedInput = next
+                            }
+                        } else {
+                            let prev = mathFields.getPrev(mathField)
+                            if (prev) {
+                                prev.focus()
+                                prev.moveToRightEnd()
+                                selectedInput = prev
+                            }
                         }
                     },
                     deleteOutOf: function() {
@@ -120,7 +142,12 @@
                         }
                     }
                 },
-                restrictMismatchedBrackets: true
+                restrictMismatchedBrackets: true,
+                autoCommands: 'pi theta sqrt sum'
+            })
+
+            $(document).on('keyup keydown', function(e) {
+                shifted = e.shiftKey
             })
 
             if (prevMathField) {
