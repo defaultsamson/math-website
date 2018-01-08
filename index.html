@@ -82,6 +82,7 @@
             let mathField = MQ.MathField(element, {
                 handlers: {
                     edit: function() {
+                        // TODO better way to detect if the field is empty?
                         element.style.borderColor = mathField.latex().length > 0 ? 'white' : 'grey'
 
                         selectedInput = element
@@ -124,19 +125,42 @@
                             }
                         }
                     },
-                    deleteOutOf: function() {
+                    deleteOutOf: function(direction) {
+                        // TODO better way to detect if the field is empty?
                         if (mathFields.length > 1 && mathField.latex().length == 0) {
-                            let prev = mathFields.getPrev(mathField)
-                            if (prev) {
-                                prev.focus()
-                                selectedInput = prev
-                            } else {
+
+                            if (direction == MQ.R) {
                                 let next = mathFields.getNext(mathField)
                                 if (next) {
                                     next.focus()
+                                    next.moveToLeftEnd()
                                     selectedInput = next
+                                } else {
+                                    let prev = mathFields.getPrev(mathField)
+                                    if (prev) {
+                                        prev.focus()
+                                        prev.moveToRightEnd()
+                                        selectedInput = prev
+                                    }
+                                }
+
+                            } else {
+                                let prev = mathFields.getPrev(mathField)
+                                if (prev) {
+                                    prev.focus()
+                                    prev.moveToRightEnd()
+                                    selectedInput = prev
+                                } else {
+                                    let next = mathFields.getNext(mathField)
+                                    if (next) {
+                                        next.focus()
+                                        next.moveToRightEnd()
+                                        selectedInput = next
+                                    }
                                 }
                             }
+
+
                             $(div).remove()
                             mathFields.removeElem(mathField)
                         }
